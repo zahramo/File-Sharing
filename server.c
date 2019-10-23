@@ -10,7 +10,7 @@
 #include <fcntl.h>  
 
 
-#define LISTENINGPORT 6093
+#define LISTENINGPORT 6099
 #define TRUE 1
 #define FALSE -1
 #define  MAXNUMOFCLIENTS 20
@@ -51,7 +51,7 @@ void makeHeartBeatSocket()
     heartBeatSocket = socket(AF_INET, SOCK_DGRAM, 0);
 
     heartBeatserverListenAddress.sin_family = AF_INET;
-    heartBeatserverListenAddress.sin_addr.s_addr = INADDR_ANY;
+    heartBeatserverListenAddress.sin_addr.s_addr = htonl(INADDR_BROADCAST);
     //htonl(INADDR_BROADCAST)
     heartBeatserverListenAddress.sin_port = htons(heartBeatPort);
 
@@ -127,7 +127,7 @@ void makeServerListenSocket()
         exit(EXIT_FAILURE);   
     }
     //?
-    write(1, "Now Serve Is Listening On Port ", 31);
+    write(1, "Now Server Is Listening On Port ", 31);
     //write(1, LISTENINGPORT, sizeof(LISTENINGPORT));
 }
 
@@ -323,3 +323,14 @@ int main(int argc, char const *argv[])
     while(TRUE){};
     return 0;  
 }
+
+
+
+
+
+
+
+
+
+
+
