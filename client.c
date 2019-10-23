@@ -44,7 +44,8 @@ typedef struct {
 
 typedef struct {
     char nameOfFile[FILENAMELENGTH];
-} brMessage;
+    int type; // 0: File, 1: Port
+} broadcastMessageStruct;
 
 
 int heartBeatPort, broadCastPort, clientPort, heartBeatSocket, numOfHeartBeatMessage, serverListeningPort, clientSocket, broadCastSendSocket, clientRecvSocket, broadCastRecvSocket, clientSendSocket,clientSockets[MAXNUMOFCLIENTS];
@@ -53,9 +54,6 @@ heartBeatMessageStruct heartBeatMessage;
 fd_set readfds;
 char broadCastFileName[FILENAMELENGTH];
 int stopBroadCasting = TRUE;
-//commandMessageStruct clientCommandMessage;
-//serverMessageStruct serverCommandMessage;
-
 
 void setTimeForWaiting()
 {
@@ -102,6 +100,7 @@ void makeHeartBeatSocket()
 int isServerAlive()
 {   
     numOfHeartBeatMessage = recvfrom(heartBeatSocket, &heartBeatMessage, sizeof(heartBeatMessage) , 0, NULL, 0);
+    heartBeatClientAddress.sin_addr.s_addr = htonl(INADDR_BROADCAST);
     if(numOfHeartBeatMessage < 0)
     {
         return FALSE;
@@ -139,7 +138,6 @@ void addDownloadedFile(serverMessageStruct serverCommandMessage,commandMessageSt
 
     if((fd = open(clientCommandMessage.nameOfFile, O_RDONLY)) < 0)
     {
-        close(fd);
         if((fd = open(clientCommandMessage.nameOfFile, O_CREAT | O_RDWR | S_IRUSR | S_IWUSR)) < 0)
         {
             perror("can not create file\n");
@@ -221,25 +219,7 @@ int getCommands(commandMessageStruct* clientCommandMessage)
 }
 
 
-void connectClientToServer(commandMessageStruct clientCommandMessage)
-{
-    serverMessageStruct serverCommandMessage;
-    //getCommands();
-    if (connect(clientSocket, (struct sockaddr *) &clientToServerSocketAddress, sizeof(clientToServerSocketAddress)) < 0)
-    {
-        perror("connection to server faild\n");
-        close(clientSocket);
-        exit(EXIT_FAILURE); 
-    }
-    write(1, "Client Connected To Server Successfully.\n", 41);
-    
-    send(clientSocket, &clientCommandMessage, sizeof(clientCommandMessage),0);
-    if(clientCommandMessage.commandType == DOWNLOAD)
-    {
-        recv(clientSocket, &serverCommandMessage, sizeof(serverCommandMessage),0);
-        addDownloadedFile(serverCommandMessage ,clientCommandMessage);   
-    }
-}
+
 
 int doesFileExist(char* fileName)
 {
@@ -268,39 +248,6 @@ void makeClientSocket()
 }
 
 
-void handleConnectionClientToServer(commandMessageStruct clientCommandMessage)
-{
-    makeClientSocket();
-    connectClientToServer(clientCommandMessage);
-}
-
-
-void makeBroadCastSendSocket()
-{
-    broadCastSendSocket = socket(AF_INET, SOCK_DGRAM, 0);
-
-    broadCastSendSocketAddress.sin_family = AF_INET;
-    broadCastSendSocketAddress.sin_addr.s_addr = INADDR_ANY;
-    //htonl(INADDR_BROADCAST)
-    broadCastSendSocketAddress.sin_port = htons(broadCastPort);
-
-    if (broadCastSendSocket < 0) 
-    { 
-        perror("broadCastSendSocket failed\n"); 
-        exit(EXIT_FAILURE); 
-    }
-    if (setsockopt(broadCastSendSocket, SOL_SOCKET, SO_REUSEADDR, &broadCastSendSocketAddress, sizeof(broadCastSendSocketAddress)) < 0) 
-    {
-        perror("set broadCastSendSocket option faild\n");
-        exit(EXIT_FAILURE);
-    }
-    if (setsockopt(broadCastSendSocket, SOL_SOCKET, SO_BROADCAST, &broadCastSendSocketAddress, sizeof(broadCastSendSocketAddress)) < 0) 
-    {
-        perror("set broadCastSendSocket option2 faild\n");
-        exit(EXIT_FAILURE);
-    }
-    
-}
 
 
  int addConnectionsTOFDSET()
@@ -309,12 +256,10 @@ void makeBroadCastSendSocket()
     FD_ZERO(&readfds);   
     FD_SET(broadCastRecvSocket, &readfds);  
     FD_SET(STDIN_FILENO, &readfds);
-    FD_SET(clientSendSocket, &readfds);
 
     int maxClientSocket = broadCastRecvSocket;
     clientSockets[0] = STDIN_FILENO;
     clientSockets[1] = broadCastRecvSocket;
-    clientSockets[2] = clientSendSocket;
             
     for (i = 0; i < MAXNUMOFCLIENTS; i++)   
     {   
@@ -336,8 +281,9 @@ void makeBroadCastSendSocket()
 void broadCastToFindFile()
 {
     int bytesTransmitted;
-    brMessage broadCastMessage;
+    broadcastMessageStruct broadCastMessage;
     strcpy(broadCastMessage.nameOfFile, broadCastFileName);
+    broadCastMessage.type = 0;
 
 
     bytesTransmitted = sendto(broadCastSendSocket, &broadCastMessage, sizeof(broadCastMessage), 0, (struct sockaddr *)&broadCastSendSocketAddress, sizeof(broadCastSendSocketAddress));
@@ -386,19 +332,22 @@ void handleClientRequest()
 
 void sendClientPort()
 {
-    char strClientPort[10];
-    //printf("%d\n",clientPort);
-    sprintf(strClientPort, "%d", clientPort);
-    //printf("client port : %s\n",strClientPort);
+    broadcastMessageStruct clientPortMessage;
+    sprintf(clientPortMessage.nameOfFile, "%d", clientPort);
+    clientPortMessage.type = 1;
     int bytesTransmitted;
+    
+    bytesTransmitted = sendto(broadCastSendSocket, &clientPortMessage, sizeof(clientPortMessage), 0, (struct sockaddr *)&broadCastSendSocketAddress, sizeof(broadCastSendSocketAddress));
 
-    bytesTransmitted = sendto(broadCastSendSocket, strClientPort, strlen(strClientPort), 0, (struct sockaddr *)&broadCastSendSocketAddress, sizeof(broadCastSendSocketAddress));
     if (bytesTransmitted < 0)
     {
         perror("sending client port failed\n");
         exit(EXIT_FAILURE);
     }
     //printf("bytes : %d\n",bytesTransmitted);
+    write(1,"My Port Is: ",13);
+    write(1,clientPortMessage.nameOfFile,strlen(clientPortMessage.nameOfFile));
+    write(1,"\n",2);
     write(1,"I Sent My Port To Other Client\n",32);
 
 }
@@ -414,28 +363,36 @@ void makeClientRecvSocket(int otherClientPort)
     }
     clientRecvSocketAddress.sin_family = AF_INET;
     clientRecvSocketAddress.sin_addr.s_addr = INADDR_ANY;
-    clientRecvSocketAddress.sin_port = htons(otherClientPort);
+    clientRecvSocketAddress.sin_port = htons(otherClientPort); 
 }
 
-
-void givePermission(int otherClientPort)
+void getPermission(broadcastMessageStruct file)
 {
-    char permissionMsg = '1';
-    makeClientRecvSocket(otherClientPort);
-    if (connect(clientRecvSocket, (struct sockaddr *) &clientRecvSocketAddress, sizeof(clientRecvSocketAddress)) < 0)
+    int addressLen;
+    char permissionMsg;
+    commandMessageStruct commandMessage;
+    addressLen = sizeof(clientSendSocketAddress);
+    clientSendSocket = accept(clientSendSocket,  (struct sockaddr *)&clientSendSocketAddress, (socklen_t*)&addressLen);
+    write(1, "Client Connected To Client Successfully.\n", 42);
+    if (( recv(clientSendSocket, &permissionMsg, 1, 0)) <= 0)   
+    {   
+        write(1, "Peer has been disconnected.\n", 29);
+    }    
+    else 
     {
-        perror("connection to other client faild\n");
-        close(clientRecvSocket);
-        exit(EXIT_FAILURE); 
+        if(permissionMsg == '1')
+        {
+            write(1,"I Am Going To Send File To Other Client\n",41);
+            prepareFileToUpload(file.nameOfFile, &commandMessage);
+         // printf("Send data: %s\n", commandMessage.uploadFileData);
+            int a = send(clientSendSocket, commandMessage.uploadFileData,
+                        strlen(commandMessage.uploadFileData),0);
+         //   printf("Num of bytes: %d\n", a);
+        }
     }
-    write(1, "Client Connected To Other Client Successfully.\n", 48);
-    
-    send(clientRecvSocket, &permissionMsg, 1,0);
-    //recv(clientRecvSocket, permissionMsg, strlen(permissionMsg),0)
-
 }
 
-void addrecievingFile(char* filaName,char* fileData)
+void addrecievingFile(char* fileName,char* fileData)
 {
     int readDownloadedFile;
     write(1, "Downloaded File Recieved\n", 25);
@@ -444,9 +401,10 @@ void addrecievingFile(char* filaName,char* fileData)
 
     int fd, numOfBytesWrite;
 
-    if((fd = open(fileData, O_RDONLY)) < 0)
+    if((fd = open(fileName, O_RDONLY)) < 0)
     {
-        if((fd = open(fileData, O_CREAT | O_RDWR | S_IRUSR | S_IWUSR)) < 0)
+       // printf("%s\n", fileName);
+        if((fd = open(fileName, O_CREAT | O_RDWR | S_IRUSR | S_IWUSR)) < 0)
         {
             perror("can not create file\n");
             exit(EXIT_FAILURE);
@@ -460,56 +418,107 @@ void addrecievingFile(char* filaName,char* fileData)
     close(fd);
 }
 
+void givePermission(int otherClientPort)
+{
+    char permissionMsg = '1';
+    makeClientRecvSocket(otherClientPort);
+    if (connect(clientRecvSocket, (struct sockaddr *) &clientRecvSocketAddress, sizeof(clientRecvSocketAddress)) < 0)
+    {
+        perror("connection to other client faild\n");
+        close(clientRecvSocket);
+        exit(EXIT_FAILURE); 
+    }
+    write(1, "I Connected To Other Client(Who has The File I Want) Successfully.\n", 68);
+    
+    send(clientRecvSocket, &permissionMsg, 1,0);
+    write(1, "I Give Permission To Other Client(Who has The File I Want)\n",60);
+    char recieveFile[FILEDATALENGTH];
+    int a = recv(clientRecvSocket, recieveFile, strlen(recieveFile),0);
+    recieveFile[a] = '\0';
+   // printf("Num of bytes: %d\n", a);
+    //printf("data of file is:%s\n********\n",recieveFile);
+    addrecievingFile(broadCastFileName,recieveFile);
+}
 
-void handleOtherClientsRequests(commandMessageStruct* clientCommandMessage)
+void handleOtherClientsRequests(commandMessageStruct* commandMessage)
 {
     int i,numOfFileNameBytes;
     char recvClientPort[10];
-    brMessage recvFile;
+    broadcastMessageStruct recvFile;
     
-   // printf("now we are in handleOtherClientRequest func \n ");
     if (FD_ISSET(broadCastRecvSocket, &readfds))   
     {  
-       // printf("now we are in handleOtherClientRequest func and an event\n "); 
+        write(1,"There Is An Event On Broadcast Recv Socket\n",44);
         if(stopBroadCasting == TRUE)
         {
+            write(1,"I'm Not Broadcasting For a File Now\n",37);
             numOfFileNameBytes = recvfrom(broadCastRecvSocket, &recvFile, sizeof(recvFile) , 0, NULL, 0);
-            
             if(numOfFileNameBytes < 0)
             {
                 perror("file name not recieved\n");
                 exit(EXIT_FAILURE);
             }
-            write(1,"Name Of File Requested By Other Client Recieves\n",50);
-           // printf("%s\n",recvFile.nameOfFile);
+            if (recvFile.type == 1){
+                return;
+            }
+            write(1,"I Recieve A File Name From Other Client\n File Name Is: ",56);
+            write(1,recvFile.nameOfFile,strlen(recvFile.nameOfFile));
+            write(1,"\n",2);
             if(doesFileExist(recvFile.nameOfFile) == TRUE)
             {
                 write(1,"I Have The File Requested By Other Client\n",43);
                 sendClientPort();
+                getPermission(recvFile);
             }
-            strcpy(clientCommandMessage->nameOfFile,recvFile.nameOfFile); 
         }
         else 
         {
-            numOfFileNameBytes = recvfrom(broadCastRecvSocket, recvClientPort, strlen(recvClientPort) , 0, NULL, 0);
-            
+            write(1,"I'm Broadcasting For a File Now\n",37);
+            numOfFileNameBytes = recvfrom(broadCastRecvSocket, &recvFile, sizeof(recvFile) , 0, NULL, 0);
             if(numOfFileNameBytes < 0)
             {
                 perror("client port not recieved\n");
                 exit(EXIT_FAILURE);
             }
-           // printf("numofbytes: %d\n",numOfFileNameBytes);
+            if (recvFile.type == 0)
+                return;
             write(1,"Sombody Has The File I Need, I Get His Client Port\n",52);
-         //   printf("%s\n",recvClientPort);
+            write(1,"His Client Port Is: ",21);
+            write(1,recvFile.nameOfFile,strlen(recvFile.nameOfFile));
+            write(1,"\n",2);
             stopBroadCasting = TRUE;
+            write(1,"I Found A File That I Want, So I Stop Broadcasting\n",52);
             close(broadCastSendSocket);
-            givePermission(atoi(recvClientPort));
-            commandMessageStruct recieveFile;
-            recv(clientRecvSocket, &recieveFile, sizeof(recieveFile),0);
-            addrecievingFile(recieveFile.nameOfFile,recieveFile.uploadFileData);
-
+            givePermission(atoi(recvFile.nameOfFile));
         }
     }
+}
+
+void makeBroadCastSendSocket()
+{
+    broadCastSendSocket = socket(AF_INET, SOCK_DGRAM, 0);
+
+    broadCastSendSocketAddress.sin_family = AF_INET;
+    broadCastSendSocketAddress.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+    //htonl(INADDR_BROADCAST)
+    broadCastSendSocketAddress.sin_port = htons(broadCastPort);
+
+    if (broadCastSendSocket < 0) 
+    { 
+        perror("broadCastSendSocket failed\n"); 
+        exit(EXIT_FAILURE); 
+    }
+    if (setsockopt(broadCastSendSocket, SOL_SOCKET, SO_REUSEPORT, &broadCastSendSocketAddress, sizeof(broadCastSendSocketAddress)) < 0) 
+    {
+        perror("set broadCastSendSocket option faild\n");
+        exit(EXIT_FAILURE);
+    }
+    if (setsockopt(broadCastSendSocket, SOL_SOCKET, SO_BROADCAST, &broadCastSendSocketAddress, sizeof(broadCastSendSocketAddress)) < 0) 
+    {
+        perror("set broadCastSendSocket option2 faild\n");
+        exit(EXIT_FAILURE);
+    }
+    
 }
 
 
@@ -544,57 +553,37 @@ void makeClientSendSocket()
         perror("client send socket failed\n"); 
         exit(EXIT_FAILURE); 
     }
-    if (setsockopt(clientSendSocket, SOL_SOCKET, SO_REUSEPORT, &clientSendSocketAddress, sizeof(clientSendSocketAddress)) < 0) 
-    {
-        perror("set client send socket option faild\n");
-        exit(EXIT_FAILURE);
-    }
     clientSendSocketAddress.sin_family = AF_INET;
     clientSendSocketAddress.sin_addr.s_addr = INADDR_ANY;
     clientSendSocketAddress.sin_port = htons(clientPort);
-}
+    if (bind(clientSendSocket, (struct sockaddr *)&clientSendSocketAddress, 
+            sizeof(clientSendSocketAddress))<0){   
+        perror("bind failed");   
+        exit(EXIT_FAILURE);   
+    }   
+    struct timeval timeForWaiting;
+    timeForWaiting.tv_sec = WAITFORSERVERTIME;
+    timeForWaiting.tv_usec = 0;
 
 
-void getPermission(commandMessageStruct *clientCommandMessage)
-{
-    int addressLen;
-    char permissionMsg;
-    if(FD_ISSET(clientSendSocket, &readfds))
-    {
-        addressLen = sizeof(clientSendSocketAddress);
-        int newSocket = accept(clientSendSocket,  (struct sockaddr *)&clientSendSocketAddress, (socklen_t*)&addressLen);
-        
-        if (newSocket < 0)   
-        {   
-            perror("accept connection faild\n");   
-            exit(EXIT_FAILURE);   
-        }
-        write(1, "Client Connected To Client Successfully.\n", 42);
-        if (( recv(newSocket, &permissionMsg, 1, 0)) <= 0)   
-        {   
-            perror("recv permission faild\n");   
-            exit(EXIT_FAILURE);  
-        }    
-        else 
-        { 
-            if(permissionMsg == '1')
-            {
-                prepareFileToUpload(clientCommandMessage->nameOfFile,clientCommandMessage);
-                send(newSocket, clientCommandMessage,sizeof(clientCommandMessage),0);
-            }  
-        }
+
+    if (setsockopt(clientSendSocket, SOL_SOCKET, SO_RCVTIMEO, &timeForWaiting, sizeof(timeForWaiting)) < 0){
+        perror("set time out faild");
+        exit(EXIT_FAILURE);
     }
+     
+    if (listen(clientSendSocket, 3) < 0){   
+        perror("listen");   
+        exit(EXIT_FAILURE);   
+    }   
 }
-
-
-
-
 
 void handleConnectionClientToClient(commandMessageStruct clientCommandMessage)
 {
     makebroadCastRecvSocket();
     makeClientSendSocket();
     makeBroadCastSendSocket();
+
     int activity, i, maxSd; 
     
 
@@ -602,19 +591,11 @@ void handleConnectionClientToClient(commandMessageStruct clientCommandMessage)
     {   
         clientSockets[i] = 0;   
     }
-
-    // if (listen(broadCastRecvSocket, 10) < 0)   
-    // {   
-    //     perror("broadCast listen faild\n");   
-    //     exit(EXIT_FAILURE);   
-    // }
     write(1,"Now Client Is Waiting For Other Client's Requests..\n",53);   
          
     while(TRUE)   
     {   
         maxSd = addConnectionsTOFDSET(); 
-      //  printf("%d\n",maxSd); 
-       // printf("%d\n",broadCastRecvSocket); 
         
         activity = select(maxSd + 1, &readfds, NULL, NULL, NULL);
         
@@ -624,17 +605,46 @@ void handleConnectionClientToClient(commandMessageStruct clientCommandMessage)
             perror("select error\n");
             exit(EXIT_FAILURE);
         }  
-       // write(1,"1\n",2);
         handleOtherClientsRequests(&clientCommandMessage);
         handleClientRequest();
-       // write(1,"1:))\n",2);
-        
-        //write(1,"2\n",2);
-        getPermission(&clientCommandMessage);
     }   
-
-    //connectClientToClient(clientCommandMessage);
 }
+
+void connectClientToServer(commandMessageStruct clientCommandMessage)
+{
+    serverMessageStruct serverCommandMessage;
+    //getCommands();
+    if (connect(clientSocket, (struct sockaddr *) &clientToServerSocketAddress, sizeof(clientToServerSocketAddress)) < 0)
+    {
+        perror("connection to server faild\n");
+        close(clientSocket);
+        exit(EXIT_FAILURE); 
+    }
+    write(1, "Client Connected To Server Successfully.\n", 41);
+    
+    send(clientSocket, &clientCommandMessage, sizeof(clientCommandMessage),0);
+    if(clientCommandMessage.commandType == DOWNLOAD)
+    {
+        recv(clientSocket, &serverCommandMessage, sizeof(serverCommandMessage),0);
+        if(serverCommandMessage.isExist)
+        {
+            addDownloadedFile(serverCommandMessage ,clientCommandMessage);   
+        }
+        else
+        {
+            handleConnectionClientToClient(clientCommandMessage);
+        }
+        
+        
+    }
+}
+
+void handleConnectionClientToServer(commandMessageStruct clientCommandMessage)
+{
+    makeClientSocket();
+    connectClientToServer(clientCommandMessage);
+}
+
 
 
 int main(int argc, char const *argv[])
